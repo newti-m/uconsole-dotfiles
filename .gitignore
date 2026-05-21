@@ -1,0 +1,34 @@
+# Cache and runtime
+.cache/
+.local/share/recently-used.xbel
+.local/share/gvfs-metadata/
+.local/share/Trash/
+.Xauthority
+.xsession-errors*
+.bash_history
+.sudo_as_admin_successful
+.dmrc
+
+# Browser data
+.config/chromium/
+.config/mozilla/
+
+# App data (large/generated)
+.config/libreoffice/
+.config/retroarch/
+.config/openttd/
+.config/pulse/
+.config/dconf/
+
+# Claude / AI
+.claude/
+.claude.json
+.codex/
+
+# Node
+.npm/
+
+# Misc
+*.deb
+Desktop/
+.config/rpi-backlight
