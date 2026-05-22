@@ -96,9 +96,25 @@ Both lines are in the Sway config autostart section.
 ## Config files in this repo
 
 ```
-.config/sway/config      — Sway compositor config
-.config/waybar/config    — Waybar layout and modules
-.config/waybar/style.css — Waybar Catppuccin Mocha theme
+.config/sway/config                        — Sway compositor (display rotation, keybindings, theme)
+.config/waybar/config                      — Waybar layout and modules
+.config/waybar/style.css                   — Waybar Catppuccin Mocha theme
+.config/lxterminal/lxterminal.conf         — Terminal emulator (font size 20 for uConsole display)
+.config/kanshi/config                      — kanshi display profiles (not active; sway handles rotation)
+.config/labwc/autostart                    — labwc autostart (RPi default desktop alternative)
+.config/labwc/environment                  — labwc keyboard layout
+.config/labwc/rc.xml                       — labwc window manager config
+.config/labwc/themerc-override             — labwc theme overrides
+.config/wf-panel-pi.ini                    — wf-panel-pi taskbar config
+.config/wf-panel-pi/wf-panel-pi.ini        — wf-panel-pi per-output config
+.config/xsettingsd/xsettingsd.conf         — GTK font and theme settings
+.config/pcmanfm/LXDE-pi/pcmanfm.conf       — PCManFM file manager config
+.config/pcmanfm/LXDE-pi/desktop-items*.conf — Desktop icon layouts
+.config/libfm/libfm.conf                   — libfm file manager library config
+.config/qt5ct/qt5ct.conf                   — Qt5 appearance config
+.config/qt6ct/qt6ct.conf                   — Qt6 appearance config
+.config/mimeapps.list                      — Default application associations
+.config/user-dirs.dirs                     — XDG user directory paths
 ```
 
 ## Notes
