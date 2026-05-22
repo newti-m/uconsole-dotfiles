@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Homelab VPN
+Comment=Toggle WireGuard homelab tunnel
+Exec=wg-homelab-toggle
+Icon=network-vpn
+Type=Application
+Categories=Network;
+Keywords=wireguard;vpn;homelab;tunnel;
