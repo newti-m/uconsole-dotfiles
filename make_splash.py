@@ -63,7 +63,6 @@ gpu_splash = portrait.rotate(90, expand=True)
 gpu_splash.save("/home/ntm/splash_gpu.png")
 print("Saved splash_gpu.png (800x480, pre-rotated for GPU firmware)")
 
-# Plymouth background (landscape framebuffer, same pre-rotation)
-plymouth_bg = portrait.rotate(90, expand=True)
-plymouth_bg.save("/home/ntm/splash_plymouth_bg.png")
-print("Saved splash_plymouth_bg.png for Plymouth theme")
+# Plymouth sees the DRM-rotated framebuffer (480x800 portrait), so use portrait directly
+portrait.save("/home/ntm/splash_plymouth_bg.png")
+print("Saved splash_plymouth_bg.png for Plymouth theme (portrait, DRM handles rotation)")
