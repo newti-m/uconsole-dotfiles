@@ -6,8 +6,12 @@ HEIGHT=22
 LOGFILE="/tmp/fzf-system-manager.log"
 FZF_OPTS=(--height="$HEIGHT" --border=rounded --cycle --info=inline)
 
+set -u
+
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >> "$LOGFILE"; }
 log "Script started"
+
+trap 'rm -f /tmp/fzf-system-manager.*.tmp 2>/dev/null' EXIT
 
 # ── fzf wrappers ──────────────────────────────────────────────────────────────
 
@@ -89,9 +93,12 @@ wifi_connect() {
     case "$mode" in
     saved)
         conn_id=$(wifi_conn_by_ssid "$ssid")
+        if [[ -z "$conn_id" ]]; then
+            echo "No saved profile for '$ssid'."; return 1
+        fi
         echo "Using saved profile for '$ssid'..."
         log "wifi: up saved '$ssid' (conn=$conn_id)"
-        nmcli connection up "${conn_id:-$ssid}"
+        nmcli connection up "$conn_id"
         ;;
     open)
         echo "Connecting to open network '$ssid'..."
@@ -175,23 +182,38 @@ bt_list() {
     done
 }
 
+# ── Spotify helper ────────────────────────────────────────────────────────────
+
+_spotify_cmd() {
+    local player cmd="$1"
+    player=$(playerctl -l 2>/dev/null | grep -i ncspot | head -1)
+    if [[ -z "$player" ]]; then
+        echo " ncspot not running"
+        read -rp " Press Enter to continue..." _ </dev/tty
+        return
+    fi
+    log "spotify: $cmd"
+    playerctl -p "$player" "$cmd" 2>/dev/null
+}
+
 # ── Category handlers ─────────────────────────────────────────────────────────
 
 handle_systemd() {
     local user_flag="$1"  # "--user" or ""
     local label="$2"
-    local cmd_prefix actions items result key selected action target
+    local sctl actions items result key selected action target
 
-    [[ -n "$user_flag" ]] && cmd_prefix="systemctl --user" || cmd_prefix="sudo systemctl"
-    actions=("status" "start" "stop" "restart" "enable" "disable" "reenable" "kill")
+    sctl=(systemctl)
+    [[ -n "$user_flag" ]] && sctl+=(--user)
+    actions=("status" "start" "stop" "restart" "enable" "disable" "reload-or-restart" "kill")
 
     while true; do
-        items=$(systemctl $user_flag list-units --type=service --all --no-legend 2>/dev/null \
+        items=$("${sctl[@]}" list-units --type=service --all --no-legend 2>/dev/null \
             | awk '{print $1}' | grep -v '●' | grep -v '^$' \
             | sed 's/\.service$//' | sort)
         [[ -z "$items" ]] && { echo "No services found."; read -rp " Press Enter to continue..." _ </dev/tty; return; }
 
-        local preview="systemctl $user_flag status {1}.service 2>&1 | head -25"
+        local preview="${sctl[*]} status {1}.service 2>&1 | head -25"
         local items_arr; mapfile -t items_arr <<< "$items"
         result=$(item_pick "$label" "$preview" "${items_arr[@]}")
         key=$(fzf_key "$result"); selected=$(fzf_sel "$result")
@@ -203,9 +225,9 @@ handle_systemd() {
 
         target="${selected}.service"
         echo ""
-        echo " ▶ $cmd_prefix $action $target"
-        log "exec: $cmd_prefix $action $target"
-        $cmd_prefix "$action" "$target"
+        echo " ▶ ${sctl[*]} $action $target"
+        log "exec: ${sctl[*]} $action $target"
+        "${sctl[@]}" "$action" "$target"
         echo ""; read -rp " Press Enter to continue..." _ </dev/tty
     done
 }
@@ -215,8 +237,8 @@ handle_processes() {
 
     while true; do
         local items
-        items=$(ps aux --no-headers 2>/dev/null \
-            | awk '{print $11}' | sort -u | grep -v '^$' | grep -v '^\[' | head -150)
+        items=$(ps -eo comm= --no-headers 2>/dev/null \
+            | sort -u | grep -v '^$' | grep -v '^\[' | head -150)
 
         local items_arr; mapfile -t items_arr <<< "$items"
         result=$(item_pick "running processes" "ps aux | grep -F {1} | grep -v grep" "${items_arr[@]}")
@@ -227,7 +249,7 @@ handle_processes() {
         key=$(fzf_key "$result"); action=$(fzf_sel "$result")
         is_back "$key" "$action" && continue
 
-        mapfile -t pids < <(ps aux | awk -v c="$selected" '$11==c {print $2}')
+        mapfile -t pids < <(ps -eo pid,comm= | awk -v c="$selected" '$2==c {print $1}')
         if [[ ${#pids[@]} -gt 0 ]]; then
             echo ""; echo " ▶ kill -$action ${pids[*]} ($selected)"
             log "kill -$action ${pids[*]} ($selected)"
@@ -508,9 +530,14 @@ handle_spotify() {
         read -rp " Press Enter to continue..." _ </dev/tty
         return
     }
+    command -v playerctl &>/dev/null || {
+        echo " playerctl not found. Install with: sudo apt install playerctl"
+        read -rp " Press Enter to continue..." _ </dev/tty
+        return
+    }
 
     while true; do
-        local tmpstat; tmpstat=$(mktemp)
+        local tmpstat; tmpstat=$(mktemp /tmp/fzf-system-manager.XXXXXX.tmp)
         {
             local player
             player=$(playerctl -l 2>/dev/null | grep -i ncspot | head -1)
@@ -537,7 +564,7 @@ handle_spotify() {
         local result key choice
         result=$(printf '↩ back\nopen ncspot\nplay/pause\nnext\nprev\nstop\n' \
             | fzf "${FZF_OPTS[@]}" --prompt " spotify  " \
-                  --preview="cat $tmpstat" \
+                  --preview="cat \"$tmpstat\"" \
                   --preview-window=up:8:wrap \
                   --expect=left,esc)
 
@@ -554,24 +581,16 @@ handle_spotify() {
             ncspot
             ;;
         "play/pause")
-            log "spotify: play-pause"
-            if [[ -n "$player" ]]; then playerctl -p "$player" play-pause 2>/dev/null
-            else echo " ncspot not running"; read -rp " Press Enter to continue..." _ </dev/tty; fi
+            _spotify_cmd play-pause
             ;;
         "next")
-            log "spotify: next"
-            if [[ -n "$player" ]]; then playerctl -p "$player" next 2>/dev/null
-            else echo " ncspot not running"; read -rp " Press Enter to continue..." _ </dev/tty; fi
+            _spotify_cmd next
             ;;
         "prev")
-            log "spotify: prev"
-            if [[ -n "$player" ]]; then playerctl -p "$player" previous 2>/dev/null
-            else echo " ncspot not running"; read -rp " Press Enter to continue..." _ </dev/tty; fi
+            _spotify_cmd previous
             ;;
         "stop")
-            log "spotify: stop"
-            if [[ -n "$player" ]]; then playerctl -p "$player" stop 2>/dev/null
-            else echo " ncspot not running"; read -rp " Press Enter to continue..." _ </dev/tty; fi
+            _spotify_cmd stop
             ;;
         esac
         [[ "$choice" != "open ncspot" ]] && sleep 0.3
@@ -615,7 +634,7 @@ handle_netstatus() {
 
         # Write status to a temp file so fzf can display it in its own
         # preview pane — avoids content printing above/off the fzf window.
-        local tmpstat; tmpstat=$(mktemp)
+        local tmpstat; tmpstat=$(mktemp /tmp/fzf-system-manager.XXXXXX.tmp)
         {
             printf ' wifi:         %s\n\n' "$wifi_line"
             printf ' internal:\n%s\n\n' "$int_lines"
@@ -625,7 +644,7 @@ handle_netstatus() {
         local result key choice
         result=$(printf '↩ back\nrefresh\n' \
             | fzf "${FZF_OPTS[@]}" --prompt " network status  " \
-                  --preview="cat $tmpstat" \
+                  --preview="cat \"$tmpstat\"" \
                   --preview-window=up:9:wrap \
                   --expect=left,esc)
 
