@@ -502,6 +502,82 @@ handle_bluetooth() {
     done
 }
 
+handle_spotify() {
+    command -v ncspot &>/dev/null || {
+        echo " ncspot not found. Install from https://github.com/hrkfdn/ncspot/releases"
+        read -rp " Press Enter to continue..." _ </dev/tty
+        return
+    }
+
+    while true; do
+        local tmpstat; tmpstat=$(mktemp)
+        {
+            local player
+            player=$(playerctl -l 2>/dev/null | grep -i ncspot | head -1)
+            if [[ -n "$player" ]] && playerctl -p "$player" status &>/dev/null; then
+                local status title artist album pos dur
+                status=$(playerctl -p "$player" status 2>/dev/null)
+                title=$(playerctl -p "$player" metadata title 2>/dev/null || echo "—")
+                artist=$(playerctl -p "$player" metadata artist 2>/dev/null || echo "—")
+                album=$(playerctl -p "$player" metadata album 2>/dev/null || echo "—")
+                pos=$(playerctl -p "$player" position 2>/dev/null \
+                    | awk '{m=int($1/60); s=int($1%60); printf "%d:%02d", m, s}')
+                dur=$(playerctl -p "$player" metadata mpris:length 2>/dev/null \
+                    | awk '{m=int($1/1000000/60); s=int($1/1000000%60); printf "%d:%02d", m, s}')
+                printf ' status:  %s\n' "$status"
+                printf ' track:   %s\n' "$title"
+                printf ' artist:  %s\n' "$artist"
+                printf ' album:   %s\n' "$album"
+                [[ -n "$pos" && -n "$dur" ]] && printf ' pos:     %s / %s\n' "$pos" "$dur"
+            else
+                printf ' ncspot not running\n\n launch "open ncspot" to start\n'
+            fi
+        } > "$tmpstat"
+
+        local result key choice
+        result=$(printf '↩ back\nopen ncspot\nplay/pause\nnext\nprev\nstop\n' \
+            | fzf "${FZF_OPTS[@]}" --prompt " spotify  " \
+                  --preview="cat $tmpstat" \
+                  --preview-window=up:8:wrap \
+                  --expect=left,esc)
+
+        rm -f "$tmpstat"
+        key=$(fzf_key "$result"); choice=$(fzf_sel "$result")
+        is_back "$key" "$choice" && return
+
+        local player
+        player=$(playerctl -l 2>/dev/null | grep -i ncspot | head -1)
+
+        case "$choice" in
+        "open ncspot")
+            log "spotify: launch ncspot"
+            ncspot
+            ;;
+        "play/pause")
+            log "spotify: play-pause"
+            if [[ -n "$player" ]]; then playerctl -p "$player" play-pause 2>/dev/null
+            else echo " ncspot not running"; read -rp " Press Enter to continue..." _ </dev/tty; fi
+            ;;
+        "next")
+            log "spotify: next"
+            if [[ -n "$player" ]]; then playerctl -p "$player" next 2>/dev/null
+            else echo " ncspot not running"; read -rp " Press Enter to continue..." _ </dev/tty; fi
+            ;;
+        "prev")
+            log "spotify: prev"
+            if [[ -n "$player" ]]; then playerctl -p "$player" previous 2>/dev/null
+            else echo " ncspot not running"; read -rp " Press Enter to continue..." _ </dev/tty; fi
+            ;;
+        "stop")
+            log "spotify: stop"
+            if [[ -n "$player" ]]; then playerctl -p "$player" stop 2>/dev/null
+            else echo " ncspot not running"; read -rp " Press Enter to continue..." _ </dev/tty; fi
+            ;;
+        esac
+        [[ "$choice" != "open ncspot" ]] && sleep 0.3
+    done
+}
+
 handle_netstatus() {
     while true; do
         local wifi_ssid wifi_signal wifi_bar wifi_line int_lines ext_ip
@@ -562,7 +638,7 @@ handle_netstatus() {
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
-CATEGORIES=("system services" "user services" "running processes" "docker containers" "wifi" "wireguard" "bluetooth" "network status")
+CATEGORIES=("system services" "user services" "running processes" "docker containers" "wifi" "wireguard" "bluetooth" "network status" "spotify")
 
 while true; do
     result=$(menu_pick "category" "${CATEGORIES[@]}")
@@ -579,5 +655,6 @@ while true; do
     "wireguard")         handle_wireguard  ;;
     "bluetooth")         handle_bluetooth  ;;
     "network status")    handle_netstatus  ;;
+    "spotify")           handle_spotify    ;;
     esac
 done

@@ -1,6 +1,7 @@
 [Unit]
 Description=uConsole volume key daemon
 After=default.target
+After=systemd-modules-load.service
 
 [Service]
 ExecStart=/home/ntm/.local/bin/uconsole-volume
