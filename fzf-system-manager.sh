@@ -144,6 +144,30 @@ wg_interfaces() {
     } | grep -E '^[A-Za-z0-9_=+.-]{1,15}$' | sort -u
 }
 
+# ── Bluetooth helpers ────────────────────────────────────────────────────────
+
+bt_check() { command -v bluetoothctl &>/dev/null || { echo "bluetoothctl not found (install bluez)"; return 1; }; }
+
+bt_list() {
+    # Output per line: "STATUS NAME\tMAC"
+    bluetoothctl devices 2>/dev/null | while IFS= read -r line; do
+        [[ "$line" != Device* ]] && continue
+        local mac name info connected paired
+        mac=$(awk '{print $2}' <<< "$line")
+        name=$(awk '{$1=$2=""; sub(/^ */,""); print}' <<< "$line")
+        info=$(bluetoothctl info "$mac" 2>/dev/null)
+        connected=$(awk '/^[[:space:]]+Connected:/{print $2}' <<< "$info")
+        paired=$(awk '/^[[:space:]]+Paired:/{print $2}' <<< "$info")
+        if [[ "$connected" == "yes" ]]; then
+            printf '● %-40s\t%s\n' "$name" "$mac"
+        elif [[ "$paired" == "yes" ]]; then
+            printf '○ %-40s\t%s\n' "$name" "$mac"
+        else
+            printf '  %-40s\t%s\n' "$name" "$mac"
+        fi
+    done
+}
+
 # ── Category handlers ─────────────────────────────────────────────────────────
 
 handle_systemd() {
@@ -380,9 +404,133 @@ handle_wifi() {
     done
 }
 
+handle_bluetooth() {
+    bt_check || { read -rp " Press Enter to continue..." _; return; }
+
+    local bt_menu=("devices" "scan for new devices" "controller info")
+
+    while true; do
+        local result key choice
+        result=$(menu_pick "bluetooth" "${bt_menu[@]}")
+        key=$(fzf_key "$result"); choice=$(fzf_sel "$result")
+        is_back "$key" "$choice" && return
+
+        case "$choice" in
+        "devices"|"scan for new devices")
+            if [[ "$choice" == "scan for new devices" ]]; then
+                echo " Scanning for 8 seconds..."
+                bluetoothctl scan on &>/dev/null &
+                local scan_pid=$!
+                sleep 8
+                kill "$scan_pid" 2>/dev/null
+                bluetoothctl scan off &>/dev/null
+            fi
+
+            local dev_out dev_entries
+            dev_out=$(bt_list)
+            [[ -z "$dev_out" ]] && { echo " No devices found."; read -rp " Press Enter to continue..." _; continue; }
+            mapfile -t dev_entries <<< "$dev_out"
+
+            # field 1 = "STATUS NAME" (display), field 2 = MAC (identifier)
+            result=$(printf '%s\n' "${dev_entries[@]}" \
+                | fzf "${FZF_OPTS[@]}" --prompt " select device  " \
+                      --delimiter=$'\t' --with-nth=1 \
+                      --preview='bluetoothctl info {2} 2>&1' \
+                      --preview-window=right:55%:wrap \
+                      --expect=left,esc)
+            key=$(fzf_key "$result"); local picked=$(fzf_sel "$result")
+            is_back "$key" "$picked" && continue
+
+            local mac; mac=$(cut -f2 <<< "$picked")
+            local dev_info; dev_info=$(bluetoothctl info "$mac" 2>/dev/null)
+            local connected paired
+            connected=$(awk '/^[[:space:]]+Connected:/{print $2}' <<< "$dev_info")
+            paired=$(awk '/^[[:space:]]+Paired:/{print $2}' <<< "$dev_info")
+
+            local actions=()
+            [[ "$connected" == "yes" ]] && actions+=("disconnect") || actions+=("connect")
+            [[ "$paired" != "yes" ]]    && actions+=("pair")
+            actions+=("trust" "remove" "info")
+
+            result=$(action_pick "$mac" "${actions[@]}")
+            key=$(fzf_key "$result"); local action=$(fzf_sel "$result")
+            is_back "$key" "$action" && continue
+
+            echo ""
+            echo " ▶ bluetoothctl $action $mac"
+            log "bt: $action $mac"
+            case "$action" in
+            connect)    bluetoothctl connect    "$mac" ;;
+            disconnect) bluetoothctl disconnect "$mac" ;;
+            pair)       bluetoothctl pair       "$mac" ;;
+            trust)      bluetoothctl trust      "$mac" ;;
+            remove)     bluetoothctl remove     "$mac" ;;
+            info)       bluetoothctl info       "$mac" ;;
+            esac
+            echo ""; read -rp " Press Enter to continue..." _
+            ;;
+        "controller info")
+            echo ""
+            bluetoothctl show 2>&1
+            echo ""; read -rp " Press Enter to continue..." _
+            ;;
+        esac
+    done
+}
+
+handle_netstatus() {
+    while true; do
+        local wifi_ssid wifi_signal wifi_bar wifi_line internal_lines ext_ip
+
+        wifi_ssid=$(wifi_active_ssid)
+        if [[ -n "$wifi_ssid" ]]; then
+            wifi_signal=$(nmcli -t -f ACTIVE,SIGNAL device wifi 2>/dev/null \
+                | awk -F: '$1=="yes"{print $2; exit}')
+            wifi_signal=${wifi_signal:-0}
+            wifi_bar=$(awk -v s="$wifi_signal" 'BEGIN{
+                if      (s>=80) b="▰▰▰▰▰"
+                else if (s>=60) b="▰▰▰▰▱"
+                else if (s>=40) b="▰▰▰▱▱"
+                else if (s>=20) b="▰▰▱▱▱"
+                else            b="▰▱▱▱▱"
+                print b
+            }')
+            wifi_line="$wifi_ssid  $wifi_bar  (${wifi_signal}%)"
+        else
+            wifi_line="not connected"
+        fi
+
+        internal_lines=$(ip -4 addr show 2>/dev/null \
+            | awk '/inet /{
+                split($2,a,"/"); iface=$NF
+                if (iface!="lo") printf "   %-12s %s\n", iface":", a[1]
+            }')
+
+        if command -v curl &>/dev/null; then
+            ext_ip=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "unavailable")
+        else
+            ext_ip="curl not installed"
+        fi
+
+        echo ""
+        printf ' %-14s %s\n' "wifi:"     "$wifi_line"
+        echo ""
+        printf ' %s\n' "internal:"
+        echo "$internal_lines"
+        echo ""
+        printf ' %-14s %s\n' "external:" "$ext_ip"
+        echo ""
+
+        local result key choice
+        result=$(action_pick "network status" "refresh")
+        key=$(fzf_key "$result"); choice=$(fzf_sel "$result")
+        is_back "$key" "$choice" && return
+    done
+}
+
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
-CATEGORIES=("system services" "user services" "running processes" "docker containers" "wifi" "wireguard")
+CATEGORIES=("system services" "user services" "running processes" "docker containers" "wifi" "wireguard" "bluetooth" "network status")
 
 while true; do
     result=$(menu_pick "category" "${CATEGORIES[@]}")
@@ -397,5 +545,7 @@ while true; do
     "docker containers") handle_docker    ;;
     "wifi")              handle_wifi       ;;
     "wireguard")         handle_wireguard  ;;
+    "bluetooth")         handle_bluetooth  ;;
+    "network status")    handle_netstatus  ;;
     esac
 done
