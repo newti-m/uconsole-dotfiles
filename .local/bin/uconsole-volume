@@ -1,0 +1,75 @@
+#!/usr/bin/env python3
+"""
+uConsole volume daemon.
+Grabs the keyboard exclusively so UP/DOWN are suppressed while the
+speaker button is held — they won't reach the focused app.
+  speaker + UP   → volume up (with repeat)
+  speaker + DOWN → volume down (with repeat)
+All other key events are re-injected normally via uinput.
+"""
+import subprocess, asyncio
+from evdev import InputDevice, UInput, ecodes, list_devices
+
+KEY_VOLUMEDOWN = ecodes.KEY_VOLUMEDOWN
+KEY_UP         = ecodes.KEY_UP
+KEY_DOWN       = ecodes.KEY_DOWN
+EV_KEY         = ecodes.EV_KEY
+EV_SYN         = ecodes.EV_SYN
+
+UCONSOLE_ID    = "1eaf:0024"
+STEP           = "5%"
+
+def find_devices():
+    cc = kb = None
+    for path in list_devices():
+        d = InputDevice(path)
+        vid = f"{d.info.vendor:04x}"
+        pid = f"{d.info.product:04x}"
+        if f"{vid}:{pid}" == UCONSOLE_ID:
+            keys = d.capabilities().get(EV_KEY, [])
+            if KEY_VOLUMEDOWN in keys:
+                cc = d
+            elif KEY_UP in keys:
+                kb = d
+    return cc, kb
+
+def volume(direction):
+    amt = f"{STEP}+" if direction == "up" else f"{STEP}-"
+    subprocess.run(["wpctl", "set-volume", "@DEFAULT_AUDIO_SINK@", amt],
+                   capture_output=True)
+
+async def main():
+    cc, kb = find_devices()
+    if not cc or not kb:
+        raise RuntimeError(f"uConsole devices not found (cc={cc}, kb={kb})")
+
+    kb.grab()
+    ui = UInput.from_device(kb, name="uconsole-kb-virtual")
+
+    speaker_held = False
+
+    async def read_cc():
+        nonlocal speaker_held
+        async for ev in cc.async_read_loop():
+            if ev.type == EV_KEY and ev.code == KEY_VOLUMEDOWN:
+                speaker_held = (ev.value == 1)
+
+    async def read_kb():
+        async for ev in kb.async_read_loop():
+            if ev.type == EV_KEY and ev.code in (KEY_UP, KEY_DOWN) and speaker_held:
+                if ev.value in (1, 2):   # press or repeat — call wpctl, suppress key
+                    volume("up" if ev.code == KEY_UP else "down")
+                # suppress release too so the app never sees the key
+                continue
+            ui.write(ev.type, ev.code, ev.value)
+            if ev.type == EV_SYN:
+                ui.syn()
+
+    try:
+        await asyncio.gather(read_cc(), read_kb())
+    finally:
+        kb.ungrab()
+        ui.close()
+
+if __name__ == "__main__":
+    asyncio.run(main())

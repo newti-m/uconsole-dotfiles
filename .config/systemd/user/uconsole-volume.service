@@ -1,0 +1,11 @@
+[Unit]
+Description=uConsole volume key daemon
+After=default.target
+
+[Service]
+ExecStart=/home/ntm/.local/bin/uconsole-volume
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

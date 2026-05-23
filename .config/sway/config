@@ -134,10 +134,9 @@ bindsym $mod+r mode "resize"
 bindsym $mod+minus       scratchpad show
 bindsym $mod+Shift+minus move scratchpad
 
-# Volume (dedicated hardware keys — bindcode bypasses xkb symbol lookup)
-bindcode --locked 123 exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+
-bindcode --locked 122 exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-
-bindcode --locked 121 exec wpctl set-mute   @DEFAULT_AUDIO_SINK@ toggle
+# Volume handled by uconsole-volume daemon (speaker + up/down arrows)
+# Mute toggle on speaker + Fn is handled in the daemon
+bindcode --locked 121 exec wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
 
 # Brightness
 bindsym XF86MonBrightnessUp   exec rpi-backlight up
