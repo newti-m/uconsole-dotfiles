@@ -504,7 +504,7 @@ handle_bluetooth() {
 
 handle_netstatus() {
     while true; do
-        local wifi_ssid wifi_signal wifi_bar wifi_line internal_lines ext_ip
+        local wifi_ssid wifi_signal wifi_bar wifi_line int_lines ext_ip
 
         wifi_ssid=$(wifi_active_ssid)
         if [[ -n "$wifi_ssid" ]]; then
@@ -524,31 +524,39 @@ handle_netstatus() {
             wifi_line="not connected"
         fi
 
-        internal_lines=$(ip -4 addr show 2>/dev/null \
+        int_lines=$(ip -4 addr show 2>/dev/null \
             | awk '/inet /{
                 split($2,a,"/"); iface=$NF
                 if (iface!="lo") printf "   %-12s %s\n", iface":", a[1]
             }')
 
         if command -v curl &>/dev/null; then
-            ext_ip=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null || echo "unavailable")
+            ext_ip=$(curl -s --max-time 5 https://api.ipify.org 2>/dev/null \
+                     || echo "unavailable")
         else
             ext_ip="curl not installed"
         fi
 
-        echo ""
-        printf ' %-14s %s\n' "wifi:"     "$wifi_line"
-        echo ""
-        printf ' %s\n' "internal:"
-        echo "$internal_lines"
-        echo ""
-        printf ' %-14s %s\n' "external:" "$ext_ip"
-        echo ""
+        # Write status to a temp file so fzf can display it in its own
+        # preview pane — avoids content printing above/off the fzf window.
+        local tmpstat; tmpstat=$(mktemp)
+        {
+            printf ' wifi:         %s\n\n' "$wifi_line"
+            printf ' internal:\n%s\n\n' "$int_lines"
+            printf ' external:     %s\n' "$ext_ip"
+        } > "$tmpstat"
 
         local result key choice
-        result=$(action_pick "network status" "refresh")
+        result=$(printf '↩ back\nrefresh\n' \
+            | fzf "${FZF_OPTS[@]}" --prompt " network status  " \
+                  --preview="cat $tmpstat" \
+                  --preview-window=up:9:wrap \
+                  --expect=left,esc)
+
+        rm -f "$tmpstat"
         key=$(fzf_key "$result"); choice=$(fzf_sel "$result")
         is_back "$key" "$choice" && return
+        # "refresh" selected: loop again, regenerate data
     done
 }
 
