@@ -7,7 +7,7 @@ speaker button is held — they won't reach the focused app.
   speaker + DOWN → volume down (with repeat)
 All other key events are re-injected normally via uinput.
 """
-import subprocess, asyncio
+import subprocess, asyncio, time
 from evdev import InputDevice, UInput, ecodes, list_devices
 
 KEY_VOLUMEDOWN = ecodes.KEY_VOLUMEDOWN
@@ -39,9 +39,13 @@ def volume(direction):
                    capture_output=True)
 
 async def main():
-    cc, kb = find_devices()
-    if not cc or not kb:
-        raise RuntimeError(f"uConsole devices not found (cc={cc}, kb={kb})")
+    for attempt in range(20):
+        cc, kb = find_devices()
+        if cc and kb:
+            break
+        time.sleep(0.5)
+    else:
+        raise RuntimeError("uConsole devices not found after 10s")
 
     kb.grab()
     ui = UInput.from_device(kb, name="uconsole-kb-virtual")
