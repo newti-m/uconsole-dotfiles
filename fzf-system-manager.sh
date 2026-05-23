@@ -127,9 +127,13 @@ wifi_disconnect() {
     if [[ -z "$ssid" ]]; then
         echo "Not connected to any WiFi network."; return
     fi
+    local dev
+    dev=$(nmcli -t -f DEVICE,TYPE device status | _nmcli_unescape \
+        | awk -F: '$2=="wifi"{gsub(/\x01/,":",$1); print $1; exit}')
+    if [[ -z "$dev" ]]; then echo " No wifi device found."; return; fi
     echo "Disconnecting from '$ssid'..."
-    log "wifi: disconnect '$ssid'"
-    nmcli device disconnect "$(nmcli -t -f DEVICE,TYPE device status | _nmcli_unescape | awk -F: '$2=="wifi"{gsub(/\x01/,":",$1); print $1; exit}')"
+    log "wifi: disconnect '$ssid' via $dev"
+    nmcli device disconnect "$dev"
 }
 
 # ── WireGuard helpers ─────────────────────────────────────────────────────────
@@ -150,8 +154,11 @@ bt_check() { command -v bluetoothctl &>/dev/null || { echo "bluetoothctl not fou
 
 bt_list() {
     # Output per line: "STATUS NAME\tMAC"
-    bluetoothctl devices 2>/dev/null | while IFS= read -r line; do
-        [[ "$line" != Device* ]] && continue
+    # Use interactive pipe mode so bluetoothd's full device cache is queried,
+    # including devices discovered but not yet paired.
+    printf 'devices\nquit\n' | bluetoothctl 2>/dev/null \
+    | grep '^Device ' \
+    | while IFS= read -r line; do
         local mac name info connected paired
         mac=$(awk '{print $2}' <<< "$line")
         name=$(awk '{$1=$2=""; sub(/^ */,""); print}' <<< "$line")
@@ -179,10 +186,10 @@ handle_systemd() {
     actions=("status" "start" "stop" "restart" "enable" "disable" "reenable" "kill")
 
     while true; do
-        items=$(systemctl $user_flag list-units --type=service --all --no-legend 2>&1 \
-            | awk '{print $1}' | grep -v '[●@]' | grep -v '^$' \
+        items=$(systemctl $user_flag list-units --type=service --all --no-legend 2>/dev/null \
+            | awk '{print $1}' | grep -v '●' | grep -v '^$' \
             | sed 's/\.service$//' | sort)
-        [[ -z "$items" ]] && { echo "No services found."; read -rp " Press Enter to continue..." _; return; }
+        [[ -z "$items" ]] && { echo "No services found."; read -rp " Press Enter to continue..." _ </dev/tty; return; }
 
         local preview="systemctl $user_flag status {1}.service 2>&1 | head -25"
         local items_arr; mapfile -t items_arr <<< "$items"
@@ -199,7 +206,7 @@ handle_systemd() {
         echo " ▶ $cmd_prefix $action $target"
         log "exec: $cmd_prefix $action $target"
         $cmd_prefix "$action" "$target"
-        echo ""; read -rp " Press Enter to continue..." _
+        echo ""; read -rp " Press Enter to continue..." _ </dev/tty
     done
 }
 
@@ -208,7 +215,7 @@ handle_processes() {
 
     while true; do
         local items
-        items=$(ps aux --no-headers 2>&1 \
+        items=$(ps aux --no-headers 2>/dev/null \
             | awk '{print $11}' | sort -u | grep -v '^$' | grep -v '^\[' | head -150)
 
         local items_arr; mapfile -t items_arr <<< "$items"
@@ -220,28 +227,28 @@ handle_processes() {
         key=$(fzf_key "$result"); action=$(fzf_sel "$result")
         is_back "$key" "$action" && continue
 
-        pid=$(ps aux | awk -v c="$selected" '$11==c {print $2; exit}')
-        if [[ -n "$pid" ]]; then
-            echo ""; echo " ▶ kill -$action $pid ($selected)"
-            log "kill -$action $pid ($selected)"
-            kill -"$action" "$pid"
+        mapfile -t pids < <(ps aux | awk -v c="$selected" '$11==c {print $2}')
+        if [[ ${#pids[@]} -gt 0 ]]; then
+            echo ""; echo " ▶ kill -$action ${pids[*]} ($selected)"
+            log "kill -$action ${pids[*]} ($selected)"
+            kill -"$action" "${pids[@]}"
         else
             echo " Process not found: $selected"
             log "process not found: $selected"
         fi
-        echo ""; read -rp " Press Enter to continue..." _
+        echo ""; read -rp " Press Enter to continue..." _ </dev/tty
     done
 }
 
 handle_docker() {
-    command -v docker &>/dev/null || { echo "Docker not available."; read -rp " Press Enter to continue..." _; return; }
+    command -v docker &>/dev/null || { echo "Docker not available."; read -rp " Press Enter to continue..." _ </dev/tty; return; }
     local actions=("start" "stop" "restart" "pause" "unpause" "logs" "rm")
     local result key selected action
 
     while true; do
         local items
-        items=$(docker ps -a --format '{{.Names}}\t{{.Status}}' 2>&1 | column -t | sort)
-        [[ -z "$items" ]] && { echo "No containers found."; read -rp " Press Enter to continue..." _; return; }
+        items=$(docker ps -a --format '{{.Names}}{{"\t"}}{{.Status}}' 2>/dev/null | column -t | sort)
+        [[ -z "$items" ]] && { echo "No containers found."; read -rp " Press Enter to continue..." _ </dev/tty; return; }
 
         local items_arr; mapfile -t items_arr <<< "$items"
         result=$(item_pick "docker containers" "docker inspect {1} 2>&1 | head -30" "${items_arr[@]}")
@@ -260,17 +267,20 @@ handle_docker() {
         else
             docker "$action" "$selected"
         fi
-        echo ""; read -rp " Press Enter to continue..." _
+        echo ""; read -rp " Press Enter to continue..." _ </dev/tty
     done
 }
 
 handle_wireguard() {
-    command -v wg &>/dev/null || { echo "wg not found (install wireguard-tools)"; read -rp " Press Enter to continue..." _; return; }
+    command -v wg &>/dev/null || { echo "wg not found (install wireguard-tools)"; read -rp " Press Enter to continue..." _ </dev/tty; return; }
+    # Ensure sudo credentials are cached before any fzf opens — avoids a
+    # password prompt appearing mid-menu or inside a preview pane.
+    sudo -n true 2>/dev/null || { echo " WireGuard requires sudo. Authenticating..."; sudo true || return; }
 
     while true; do
         local ifaces
         mapfile -t ifaces < <(wg_interfaces)
-        [[ ${#ifaces[@]} -eq 0 ]] && { echo " No WireGuard interfaces found."; read -rp " Press Enter to continue..." _; return; }
+        [[ ${#ifaces[@]} -eq 0 ]] && { echo " No WireGuard interfaces found."; read -rp " Press Enter to continue..." _ </dev/tty; return; }
 
         local active
         active=$(sudo wg show interfaces 2>/dev/null)
@@ -320,12 +330,12 @@ handle_wireguard() {
                 /etc/wireguard/"$iface".conf 2>&1 | less
             ;;
         esac
-        echo ""; read -rp " Press Enter to continue..." _
+        echo ""; read -rp " Press Enter to continue..." _ </dev/tty
     done
 }
 
 handle_wifi() {
-    wifi_check || { read -rp " Press Enter to continue..." _; return; }
+    wifi_check || { read -rp " Press Enter to continue..." _ </dev/tty; return; }
 
     local wifi_actions=("scan & connect" "saved networks" "disconnect" "show status")
 
@@ -340,7 +350,7 @@ handle_wifi() {
             echo " Scanning for networks..."
             local scan_out ssid_entries
             scan_out=$(wifi_scan)
-            [[ -z "$scan_out" ]] && { echo " No networks found."; read -rp " Press Enter to continue..." _; continue; }
+            [[ -z "$scan_out" ]] && { echo " No networks found."; read -rp " Press Enter to continue..." _ </dev/tty; continue; }
             mapfile -t ssid_entries <<< "$scan_out"
 
             # field 1 = "BAR ICON SSID" (display), field 2 = raw SSID
@@ -367,12 +377,12 @@ handle_wifi() {
 
             echo ""
             wifi_connect "$ssid" "$mode"
-            echo ""; read -rp " Press Enter to continue..." _
+            echo ""; read -rp " Press Enter to continue..." _ </dev/tty
             ;;
         "saved networks")
             local saved saved_arr
             saved=$(wifi_saved)
-            [[ -z "$saved" ]] && { echo " No saved networks."; read -rp " Press Enter to continue..." _; continue; }
+            [[ -z "$saved" ]] && { echo " No saved networks."; read -rp " Press Enter to continue..." _ </dev/tty; continue; }
             mapfile -t saved_arr <<< "$saved"
 
             result=$(action_pick "saved networks" "${saved_arr[@]}")
@@ -383,29 +393,36 @@ handle_wifi() {
             key=$(fzf_key "$result"); local net_action=$(fzf_sel "$result")
             is_back "$key" "$net_action" && continue
 
+            if [[ "$net_action" == "forget" ]]; then
+                result=$(action_pick "delete '$net'?" "yes, delete" "cancel")
+                key=$(fzf_key "$result"); local confirm=$(fzf_sel "$result")
+                is_back "$key" "$confirm" && continue
+                [[ "$confirm" != "yes, delete" ]] && continue
+            fi
+
             echo ""
             case "$net_action" in
             "connect") nmcli connection up "$net" ;;
             "forget")  wifi_forget "$net" ;;
             esac
-            echo ""; read -rp " Press Enter to continue..." _
+            echo ""; read -rp " Press Enter to continue..." _ </dev/tty
             ;;
         "disconnect")
             echo ""
             wifi_disconnect
-            echo ""; read -rp " Press Enter to continue..." _
+            echo ""; read -rp " Press Enter to continue..." _ </dev/tty
             ;;
         "show status")
             echo ""
             nmcli device wifi 2>/dev/null || nmcli device status
-            echo ""; read -rp " Press Enter to continue..." _
+            echo ""; read -rp " Press Enter to continue..." _ </dev/tty
             ;;
         esac
     done
 }
 
 handle_bluetooth() {
-    bt_check || { read -rp " Press Enter to continue..." _; return; }
+    bt_check || { read -rp " Press Enter to continue..." _ </dev/tty; return; }
 
     local bt_menu=("devices" "scan for new devices" "controller info")
 
@@ -419,16 +436,15 @@ handle_bluetooth() {
         "devices"|"scan for new devices")
             if [[ "$choice" == "scan for new devices" ]]; then
                 echo " Scanning for 8 seconds..."
-                bluetoothctl scan on &>/dev/null &
-                local scan_pid=$!
-                sleep 8
-                kill "$scan_pid" 2>/dev/null
-                bluetoothctl scan off &>/dev/null
+                # Interactive pipe: keeps bluetoothctl alive for the full scan
+                # so bluetoothd properly registers discovered devices in its cache
+                { printf 'scan on\n'; sleep 8; printf 'scan off\nquit\n'; } \
+                    | bluetoothctl &>/dev/null
             fi
 
             local dev_out dev_entries
             dev_out=$(bt_list)
-            [[ -z "$dev_out" ]] && { echo " No devices found."; read -rp " Press Enter to continue..." _; continue; }
+            [[ -z "$dev_out" ]] && { echo " No devices found."; read -rp " Press Enter to continue..." _ </dev/tty; continue; }
             mapfile -t dev_entries <<< "$dev_out"
 
             # field 1 = "STATUS NAME" (display), field 2 = MAC (identifier)
@@ -462,17 +478,25 @@ handle_bluetooth() {
             case "$action" in
             connect)    bluetoothctl connect    "$mac" ;;
             disconnect) bluetoothctl disconnect "$mac" ;;
-            pair)       bluetoothctl pair       "$mac" ;;
+            pair)
+                echo " Pairing $mac — confirm any passkey prompt below:"
+                # Register agent so PIN/passkey prompts go through bluetoothctl
+                # rather than appearing as raw kernel/udev prompts
+                { printf 'agent on\ndefault-agent\npair %s\n' "$mac"
+                  sleep 30
+                  printf 'quit\n'
+                } | bluetoothctl
+                ;;
             trust)      bluetoothctl trust      "$mac" ;;
             remove)     bluetoothctl remove     "$mac" ;;
             info)       bluetoothctl info       "$mac" ;;
             esac
-            echo ""; read -rp " Press Enter to continue..." _
+            echo ""; read -rp " Press Enter to continue..." _ </dev/tty
             ;;
         "controller info")
             echo ""
             bluetoothctl show 2>&1
-            echo ""; read -rp " Press Enter to continue..." _
+            echo ""; read -rp " Press Enter to continue..." _ </dev/tty
             ;;
         esac
     done
