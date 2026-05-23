@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=cyberdeck
+Description=Cyberdeck neon boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/cyberdeck
+ScriptFile=/usr/share/plymouth/themes/cyberdeck/cyberdeck.script

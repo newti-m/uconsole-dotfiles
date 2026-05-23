@@ -1,0 +1,205 @@
+Window.SetBackgroundTopColor(0.010, 0.015, 0.010);
+Window.SetBackgroundBottomColor(0.004, 0.007, 0.004);
+
+screen.width = Window.GetWidth();
+screen.height = Window.GetHeight();
+screen.x = Window.GetX();
+screen.y = Window.GetY();
+
+fun text_image(text, red, green, blue)
+{
+  return Image.Text(text, red, green, blue);
+}
+
+fun center_x(image)
+{
+  return screen.x + screen.width / 2 - image.GetWidth() / 2;
+}
+
+title.image = text_image("FLATLINE", 0.22, 1.00, 0.32);
+title.sprite = Sprite(title.image);
+title.sprite.SetPosition(center_x(title.image), screen.y + screen.height * 0.22, 40);
+
+coords.image = text_image("35.6074 N  /  140.1065 E", 0.05, 0.26, 0.08);
+coords.sprite = Sprite(coords.image);
+coords.sprite.SetPosition(center_x(coords.image), screen.y + screen.height * 0.22 + title.image.GetHeight() + 14, 40);
+
+progress.sprite = Sprite();
+progress.sprite.SetPosition(center_x(text_image("[------------------------------]", 0.15, 0.85, 0.20)), screen.y + screen.height * 0.52, 40);
+
+status.image = text_image("", 0.06, 0.38, 0.12);
+status.sprite = Sprite(status.image);
+status.sprite.SetPosition(center_x(status.image), screen.y + screen.height * 0.58, 40);
+
+tagline.image = text_image("tuned to a dead channel", 0.04, 0.20, 0.06);
+tagline.sprite = Sprite(tagline.image);
+tagline.sprite.SetPosition(center_x(tagline.image), screen.y + screen.height * 0.86, 40);
+
+message.sprite = Sprite();
+message.sprite.SetPosition(screen.x + 16, screen.y + screen.height - 28, 10000);
+
+global.tick = 0;
+global.progress_value = 0.02;
+global.status = "normal";
+
+fun draw_progress(value)
+{
+  local.count;
+  local.text;
+  count = Math.Int(value * 30);
+  text = "[";
+  for (i = 0; i < 30; i++)
+    {
+      if (i < count)
+        text += "#";
+      else
+        text += "-";
+    }
+  text += "]";
+  progress.image = text_image(text, 0.18, 0.92, 0.24);
+  progress.sprite.SetImage(progress.image);
+  progress.sprite.SetX(center_x(progress.image));
+}
+
+draw_progress(global.progress_value);
+
+fun refresh_callback()
+{
+  global.tick++;
+
+  local.phase;
+  phase = (Math.Cos(global.tick / 14) + 1) / 2;
+  title.sprite.SetOpacity(0.70 + phase * 0.30);
+
+  if (global.status == "normal")
+    {
+      global.progress_value += 0.0025;
+      if (global.progress_value > 0.96)
+        global.progress_value = 0.18;
+      draw_progress(global.progress_value);
+    }
+}
+
+Plymouth.SetRefreshFunction(refresh_callback);
+
+fun progress_callback(duration, progress)
+{
+  global.progress_value = progress;
+  draw_progress(progress);
+}
+
+Plymouth.SetBootProgressFunction(progress_callback);
+
+fun display_message_callback(text)
+{
+  message.image = text_image(text, 0.10, 0.55, 0.16);
+  message.sprite.SetImage(message.image);
+}
+
+fun hide_message_callback(text)
+{
+  message.sprite.SetImage(text_image("", 1, 1, 1));
+}
+
+Plymouth.SetDisplayMessageFunction(display_message_callback);
+Plymouth.SetHideMessageFunction(hide_message_callback);
+
+fun update_status_callback(text)
+{
+  status.image = text_image(text, 0.06, 0.38, 0.12);
+  status.sprite.SetImage(status.image);
+  status.sprite.SetX(center_x(status.image));
+}
+
+Plymouth.SetUpdateStatusFunction(update_status_callback);
+
+fun dialog_setup()
+{
+  local.box;
+  local.lock;
+  local.entry;
+
+  box.image = Image("box.png");
+  lock.image = Image("lock.png");
+  entry.image = Image("entry.png");
+
+  box.sprite = Sprite(box.image);
+  box.x = screen.x + screen.width / 2 - box.image.GetWidth() / 2;
+  box.y = screen.y + screen.height * 0.74 - box.image.GetHeight() / 2;
+  box.z = 10000;
+  box.sprite.SetPosition(box.x, box.y, box.z);
+
+  lock.sprite = Sprite(lock.image);
+  lock.x = box.x + box.image.GetWidth() / 2 - (lock.image.GetWidth() + entry.image.GetWidth()) / 2;
+  lock.y = box.y + box.image.GetHeight() / 2 - lock.image.GetHeight() / 2;
+  lock.z = box.z + 1;
+  lock.sprite.SetPosition(lock.x, lock.y, lock.z);
+
+  entry.sprite = Sprite(entry.image);
+  entry.x = lock.x + lock.image.GetWidth();
+  entry.y = box.y + box.image.GetHeight() / 2 - entry.image.GetHeight() / 2;
+  entry.z = box.z + 1;
+  entry.sprite.SetPosition(entry.x, entry.y, entry.z);
+
+  global.dialog.box = box;
+  global.dialog.lock = lock;
+  global.dialog.entry = entry;
+  global.dialog.bullet_image = Image("bullet.png");
+  dialog_opacity(1);
+}
+
+fun dialog_opacity(opacity)
+{
+  dialog.box.sprite.SetOpacity(opacity);
+  dialog.lock.sprite.SetOpacity(opacity);
+  dialog.entry.sprite.SetOpacity(opacity);
+  for (index = 0; dialog.bullet[index]; index++)
+    {
+      dialog.bullet[index].sprite.SetOpacity(opacity);
+    }
+}
+
+fun display_normal_callback()
+{
+  global.status = "normal";
+  if (global.dialog)
+    dialog_opacity(0);
+}
+
+fun display_password_callback(prompt, bullets)
+{
+  global.status = "password";
+  update_status_callback("ice check");
+
+  if (!global.dialog)
+    dialog_setup();
+  else
+    dialog_opacity(1);
+
+  for (index = 0; dialog.bullet[index] || index < bullets; index++)
+    {
+      if (!dialog.bullet[index])
+        {
+          dialog.bullet[index].sprite = Sprite(dialog.bullet_image);
+          dialog.bullet[index].x = dialog.entry.x + index * dialog.bullet_image.GetWidth();
+          dialog.bullet[index].y = dialog.entry.y + dialog.entry.image.GetHeight() / 2 - dialog.bullet_image.GetHeight() / 2;
+          dialog.bullet[index].z = dialog.entry.z + 1;
+          dialog.bullet[index].sprite.SetPosition(dialog.bullet[index].x, dialog.bullet[index].y, dialog.bullet[index].z);
+        }
+
+      if (index < bullets)
+        dialog.bullet[index].sprite.SetOpacity(1);
+      else
+        dialog.bullet[index].sprite.SetOpacity(0);
+    }
+}
+
+Plymouth.SetDisplayNormalFunction(display_normal_callback);
+Plymouth.SetDisplayPasswordFunction(display_password_callback);
+
+fun quit_callback()
+{
+  title.sprite.SetOpacity(1);
+}
+
+Plymouth.SetQuitFunction(quit_callback);
