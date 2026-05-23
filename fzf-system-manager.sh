@@ -74,16 +74,24 @@ wifi_active_ssid() {
         | awk -F: '$1=="yes" {gsub(/\x01/,":",$2); print $2; exit}'
 }
 
+# Returns the NM connection ID whose SSID matches, or empty if none
+wifi_conn_by_ssid() {
+    nmcli -t -f NAME,802-11-wireless.ssid connection show 2>/dev/null \
+        | _nmcli_unescape \
+        | awk -F: -v s="$1" '$2==s {gsub(/\x01/,":",$1); print $1; exit}'
+}
+
 # mode: "saved" | "open" | "save" | "nosave"
 wifi_connect() {
     local ssid="$1" mode="$2"
-    local password
+    local password conn_id
 
     case "$mode" in
     saved)
+        conn_id=$(wifi_conn_by_ssid "$ssid")
         echo "Using saved profile for '$ssid'..."
-        log "wifi: up saved '$ssid'"
-        nmcli connection up "$ssid"
+        log "wifi: up saved '$ssid' (conn=$conn_id)"
+        nmcli connection up "${conn_id:-$ssid}"
         ;;
     open)
         echo "Connecting to open network '$ssid'..."
@@ -92,14 +100,15 @@ wifi_connect() {
         ;;
     save|nosave)
         read -rsp " Password for '$ssid': " password; echo ""
-        [[ -z "$password" ]] && { echo "Cancelled."; return 1; }
+        if [[ -z "$password" ]]; then echo "Cancelled."; return 1; fi
         log "wifi: secured connect '$ssid' (mode=$mode)"
-        if [[ "$mode" == "save" ]]; then
-            nmcli device wifi connect "$ssid" password "$password"
-        else
-            nmcli device wifi connect "$ssid" password "$password" -- \
-                connection.autoconnect no 2>/dev/null \
-            || nmcli device wifi connect "$ssid" password "$password"
+        nmcli device wifi connect "$ssid" password "$password"
+        unset password
+        if [[ "$mode" == "nosave" ]]; then
+            # nmcli device wifi connect always creates a profile; find it by SSID
+            # and mark it non-autoconnect so it won't reconnect automatically
+            conn_id=$(wifi_conn_by_ssid "$ssid")
+            [[ -n "$conn_id" ]] && nmcli connection modify "$conn_id" connection.autoconnect no
         fi
         ;;
     esac
@@ -120,7 +129,7 @@ wifi_disconnect() {
     fi
     echo "Disconnecting from '$ssid'..."
     log "wifi: disconnect '$ssid'"
-    nmcli device disconnect "$(nmcli -t -f DEVICE,TYPE device status | grep ':wifi' | cut -d: -f1 | head -1)"
+    nmcli device disconnect "$(nmcli -t -f DEVICE,TYPE device status | _nmcli_unescape | awk -F: '$2=="wifi"{gsub(/\x01/,":",$1); print $1; exit}')"
 }
 
 # ── WireGuard helpers ─────────────────────────────────────────────────────────
@@ -132,7 +141,7 @@ wg_interfaces() {
             | awk '{print $1}' | grep '^wg-quick@' \
             | sed 's/^wg-quick@//; s/\.service$//'
         sudo ls /etc/wireguard/ 2>/dev/null | grep '\.conf$' | sed 's/\.conf$//'
-    } | grep -v '^$' | sort -u
+    } | grep -E '^[A-Za-z0-9_=+.-]{1,15}$' | sort -u
 }
 
 # ── Category handlers ─────────────────────────────────────────────────────────
@@ -149,7 +158,7 @@ handle_systemd() {
         items=$(systemctl $user_flag list-units --type=service --all --no-legend 2>&1 \
             | awk '{print $1}' | grep -v '[●@]' | grep -v '^$' \
             | sed 's/\.service$//' | sort)
-        [[ -z "$items" ]] && { echo "No services found."; read -r; return; }
+        [[ -z "$items" ]] && { echo "No services found."; read -rp " Press Enter to continue..." _; return; }
 
         local preview="systemctl $user_flag status {1}.service 2>&1 | head -25"
         local items_arr; mapfile -t items_arr <<< "$items"
@@ -171,7 +180,7 @@ handle_systemd() {
 }
 
 handle_processes() {
-    local result key selected pid
+    local result key selected action pid
 
     while true; do
         local items
@@ -187,7 +196,7 @@ handle_processes() {
         key=$(fzf_key "$result"); action=$(fzf_sel "$result")
         is_back "$key" "$action" && continue
 
-        pid=$(ps aux | grep -F "$selected" | grep -v grep | awk 'NR==1{print $2}')
+        pid=$(ps aux | awk -v c="$selected" '$11==c {print $2; exit}')
         if [[ -n "$pid" ]]; then
             echo ""; echo " ▶ kill -$action $pid ($selected)"
             log "kill -$action $pid ($selected)"
@@ -201,14 +210,14 @@ handle_processes() {
 }
 
 handle_docker() {
-    command -v docker &>/dev/null || { echo "Docker not available."; read -r; return; }
+    command -v docker &>/dev/null || { echo "Docker not available."; read -rp " Press Enter to continue..." _; return; }
     local actions=("start" "stop" "restart" "pause" "unpause" "logs" "rm")
     local result key selected action
 
     while true; do
         local items
         items=$(docker ps -a --format '{{.Names}}\t{{.Status}}' 2>&1 | column -t | sort)
-        [[ -z "$items" ]] && { echo "No containers found."; read -r; return; }
+        [[ -z "$items" ]] && { echo "No containers found."; read -rp " Press Enter to continue..." _; return; }
 
         local items_arr; mapfile -t items_arr <<< "$items"
         result=$(item_pick "docker containers" "docker inspect {1} 2>&1 | head -30" "${items_arr[@]}")
@@ -232,12 +241,12 @@ handle_docker() {
 }
 
 handle_wireguard() {
-    command -v wg &>/dev/null || { echo "wg not found (install wireguard-tools)"; read -r; return; }
+    command -v wg &>/dev/null || { echo "wg not found (install wireguard-tools)"; read -rp " Press Enter to continue..." _; return; }
 
     while true; do
         local ifaces
         mapfile -t ifaces < <(wg_interfaces)
-        [[ ${#ifaces[@]} -eq 0 ]] && { echo " No WireGuard interfaces found."; read -r; return; }
+        [[ ${#ifaces[@]} -eq 0 ]] && { echo " No WireGuard interfaces found."; read -rp " Press Enter to continue..." _; return; }
 
         local active
         active=$(sudo wg show interfaces 2>/dev/null)
@@ -283,7 +292,8 @@ handle_wireguard() {
             sudo wg show "$iface" 2>&1 || echo " Interface not active."
             ;;
         "show config")
-            sudo cat /etc/wireguard/"$iface".conf 2>&1
+            sudo grep -vE '^\s*(PrivateKey|PresharedKey)\s*=' \
+                /etc/wireguard/"$iface".conf 2>&1 | less
             ;;
         esac
         echo ""; read -rp " Press Enter to continue..." _
@@ -291,7 +301,7 @@ handle_wireguard() {
 }
 
 handle_wifi() {
-    wifi_check || { read -r; return; }
+    wifi_check || { read -rp " Press Enter to continue..." _; return; }
 
     local wifi_actions=("scan & connect" "saved networks" "disconnect" "show status")
 
@@ -306,7 +316,7 @@ handle_wifi() {
             echo " Scanning for networks..."
             local scan_out ssid_entries
             scan_out=$(wifi_scan)
-            [[ -z "$scan_out" ]] && { echo " No networks found."; read -r; continue; }
+            [[ -z "$scan_out" ]] && { echo " No networks found."; read -rp " Press Enter to continue..." _; continue; }
             mapfile -t ssid_entries <<< "$scan_out"
 
             # field 1 = "BAR ICON SSID" (display), field 2 = raw SSID
@@ -318,8 +328,9 @@ handle_wifi() {
             local ssid; ssid=$(cut -f2 <<< "$picked")
 
             # Determine connect mode without any raw prompts
-            local mode
-            if nmcli connection show "$ssid" &>/dev/null; then
+            local mode saved_conn
+            saved_conn=$(wifi_conn_by_ssid "$ssid")
+            if [[ -n "$saved_conn" ]]; then
                 mode="saved"
             elif [[ "$picked" != *"🔒"* ]]; then
                 mode="open"
@@ -337,7 +348,7 @@ handle_wifi() {
         "saved networks")
             local saved saved_arr
             saved=$(wifi_saved)
-            [[ -z "$saved" ]] && { echo " No saved networks."; read -r; continue; }
+            [[ -z "$saved" ]] && { echo " No saved networks."; read -rp " Press Enter to continue..." _; continue; }
             mapfile -t saved_arr <<< "$saved"
 
             result=$(action_pick "saved networks" "${saved_arr[@]}")
