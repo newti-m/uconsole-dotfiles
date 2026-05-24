@@ -1,0 +1,72 @@
+#!/bin/bash
+# clipboard-sync: Bidirectional clipboard sync between Wayland and X11 (XWayland)
+# Runs two loops:
+#   Loop A: wl-paste --watch -> xclip (Wayland -> X11)
+#   Loop B: polls xclip every 0.5s -> wl-copy (X11 -> Wayland)
+# Loop detection: each direction records what it last wrote so the other ignores it.
+
+set -euo pipefail
+
+# Require both WAYLAND_DISPLAY and DISPLAY
+: "${WAYLAND_DISPLAY:?Need WAYLAND_DISPLAY}"
+: "${DISPLAY:?Need DISPLAY}"
+
+TMPDIR="${XDG_RUNTIME_DIR:-/tmp}"
+LAST_FROM_WL="$TMPDIR/clipboard-sync-last-from-wl"
+LAST_FROM_X11="$TMPDIR/clipboard-sync-last-from-x11"
+PIDFILE="$TMPDIR/clipboard-sync.pid"
+
+# Clean up on exit
+cleanup() {
+    rm -f "$LAST_FROM_WL" "$LAST_FROM_X11" "$PIDFILE"
+    kill 0 2>/dev/null
+}
+trap cleanup EXIT INT TERM
+
+echo $$ > "$PIDFILE"
+
+# ---------- Loop A: Wayland -> X11 ----------
+wayland_to_x11() {
+    wl-paste --watch bash -c '
+        content=$(wl-paste --no-newline 2>/dev/null) || exit 0
+        [ -z "$content" ] && exit 0
+
+        # Read what X11->Wayland last wrote; skip if same (loop prevention)
+        last_from_x11=$(cat "'"$LAST_FROM_X11"'" 2>/dev/null) || true
+        [ "$content" = "$last_from_x11" ] && exit 0
+
+        # Push to X11
+        printf "%s" "$content" | xclip -selection clipboard -in 2>/dev/null || true
+
+        # Record what we wrote so Loop B ignores it
+        printf "%s" "$content" > "'"$LAST_FROM_WL"'"
+    ' &
+}
+
+# ---------- Loop B: X11 -> Wayland ----------
+x11_to_wayland() {
+    local prev=""
+    while true; do
+        sleep 0.5
+        content=$(xclip -selection clipboard -out 2>/dev/null) || continue
+        [ -z "$content" ] && continue
+        [ "$content" = "$prev" ] && continue
+
+        prev="$content"
+
+        # Read what Wayland->X11 last wrote; skip if same (loop prevention)
+        last_from_wl=$(cat "$LAST_FROM_WL" 2>/dev/null) || true
+        [ "$content" = "$last_from_wl" ] && continue
+
+        # Push to Wayland
+        printf "%s" "$content" | wl-copy 2>/dev/null || true
+
+        # Record what we wrote so Loop A ignores it
+        printf "%s" "$content" > "$LAST_FROM_X11"
+    done &
+}
+
+wayland_to_x11
+x11_to_wayland
+
+wait
