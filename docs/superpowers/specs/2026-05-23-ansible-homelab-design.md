@@ -20,7 +20,7 @@ YAML inventory with hosts organized into three groups:
 
 | Host | IP | User | Notes |
 |---|---|---|---|
-| aputer | 192.168.1.70 | newti | |
+| aputer | 192.168.1.70 | newti | Windows laptop — SSH connection, powershell shell, Python assumed present |
 | pbx | 192.168.1.41 | root | Proxmox node 1 |
 | pbx2 | 192.168.1.63 | auto | Proxmox node 2 |
 | plexy3-1 | 192.168.1.41 | ntm | Proxmox node 1 (non-root) |
