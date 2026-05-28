@@ -111,3 +111,5 @@ if ! shopt -oq posix; then
     . /etc/bash_completion
   fi
 fi
+
+export FZF_DEFAULT_OPTS='--color=bg+:#1e1e2e,hl:#cba6f7,fg:#cdd6f4,hl+:#cba6f7,info:#a6e3a1,prompt:#89b4fa,pointer:#f38ba8,marker:#f38ba8,spinner:#f38ba8,header:#a6e3a1'
